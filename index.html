@@ -3,22 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WAT 추첨</title>
+  <title>WAT 레이스 추첨</title>
   <style>
-    body{font-family:system-ui,sans-serif;padding:16px}
-    input,button{padding:10px;margin:6px 6px 6px 0}
-    button{cursor:pointer}
-    #log{white-space:pre-wrap;border:1px solid #ddd;padding:10px;border-radius:10px}
+    body{font-family:system-ui,sans-serif;padding:16px;background:#0b0f17;color:#e9eef7}
+    input,button{padding:10px;border-radius:10px;border:1px solid #2b3550;background:#11182a;color:#e9eef7;margin:6px 6px 6px 0}
+    button{cursor:pointer;background:#1b2a4a}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    #log{white-space:pre-wrap;border:1px solid #2b3550;padding:12px;border-radius:12px;background:#0f172a;margin-top:10px}
   </style>
 </head>
 <body>
-  <h1>WAT 레이스 추첨</h1>
+  <h1>🏁 WAT 레이스 추첨</h1>
 
   <div>
     <input id="roomId" placeholder="방 코드" />
     <input id="name" placeholder="닉네임" />
-    <label><input type="checkbox" id="asHost" /> 호스트</label>
-    <input id="hostPassword" placeholder="호스트 비번" />
+    <label style="margin-right:6px;">
+      <input type="checkbox" id="asHost" /> 호스트
+    </label>
+    <input id="hostPassword" placeholder="호스트 비번(호스트만)" />
     <button id="joinBtn">입장</button>
     <button id="drawBtn" disabled>Top7 추첨</button>
   </div>
@@ -43,7 +46,6 @@
     if (room) roomIdEl.value = room;
 
     let currentRoom = null;
-    let isHost = false;
 
     function log(msg){ logEl.textContent = msg; }
 
@@ -65,8 +67,7 @@
       socket.emit("drawTop7", { roomId: currentRoom });
     };
 
-    socket.on("joined", ({ you, isHost: host }) => {
-      isHost = host;
+    socket.on("joined", ({ you, isHost }) => {
       drawBtn.disabled = !isHost;
       log(`입장 완료: ${you}${isHost ? " (호스트)" : ""}`);
     });
