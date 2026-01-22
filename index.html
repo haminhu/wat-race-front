@@ -1,122 +1,90 @@
-import express from "express";
-import http from "http";
-import { Server } from "socket.io";
-import crypto from "crypto";
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WAT 추첨</title>
+  <style>
+    body{font-family:system-ui,sans-serif;padding:16px}
+    input,button{padding:10px;margin:6px 6px 6px 0}
+    button{cursor:pointer}
+    #log{white-space:pre-wrap;border:1px solid #ddd;padding:10px;border-radius:10px}
+  </style>
+</head>
+<body>
+  <h1>WAT 레이스 추첨</h1>
 
-const app = express();
-app.use(express.json());
+  <div>
+    <input id="roomId" placeholder="방 코드" />
+    <input id="name" placeholder="닉네임" />
+    <label><input type="checkbox" id="asHost" /> 호스트</label>
+    <input id="hostPassword" placeholder="호스트 비번" />
+    <button id="joinBtn">입장</button>
+    <button id="drawBtn" disabled>Top7 추첨</button>
+  </div>
 
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" } // 배포 후 프론트 도메인으로 제한해도 됨
-});
+  <div id="log">대기중…</div>
 
-const rooms = new Map();
-// rooms.get(roomId) = { hostSocketId, hostPassHash, participants:[{socketId,name}] }
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    const socket = io("https://wat-race.onrender.com");
 
-function sha256(s) {
-  return crypto.createHash("sha256").update(s, "utf8").digest("hex");
-}
+    const roomIdEl = document.getElementById("roomId");
+    const nameEl = document.getElementById("name");
+    const asHostEl = document.getElementById("asHost");
+    const hostPwEl = document.getElementById("hostPassword");
+    const joinBtn = document.getElementById("joinBtn");
+    const drawBtn = document.getElementById("drawBtn");
+    const logEl = document.getElementById("log");
 
-function getRoom(roomId) {
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, { hostSocketId: null, hostPassHash: null, participants: [] });
-  }
-  return rooms.get(roomId);
-}
+    // 초대링크 ?room=WAT 자동 입력
+    const params = new URLSearchParams(location.search);
+    const room = params.get("room");
+    if (room) roomIdEl.value = room;
 
-function pickUniqueIndices(total, k) {
-  const arr = Array.from({ length: total }, (_, i) => i);
-  for (let i = total - 1; i > 0; i--) {
-    const j = crypto.randomInt(0, i + 1);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr.slice(0, Math.min(k, total));
-}
+    let currentRoom = null;
+    let isHost = false;
 
-// ✅ 방 생성(호스트 비번 설정) + 초대링크 생성
-app.post("/api/create-room", (req, res) => {
-  const { roomId, hostPassword } = req.body || {};
-  if (!roomId || !hostPassword) return res.status(400).json({ ok: false, error: "roomId/hostPassword 필요" });
+    function log(msg){ logEl.textContent = msg; }
 
-  const room = getRoom(roomId);
-  room.hostPassHash = sha256(String(hostPassword));
+    joinBtn.onclick = () => {
+      const roomId = roomIdEl.value.trim();
+      const name = nameEl.value.trim();
+      const asHost = asHostEl.checked;
+      const hostPassword = hostPwEl.value;
 
-  const FRONT_BASE = process.env.FRONT_BASE || "https://example.github.io/wat-race-front";
-  const inviteLink = `${FRONT_BASE}/?room=${encodeURIComponent(roomId)}`;
+      if(!roomId || !name) return alert("방 코드/닉네임 입력");
+      currentRoom = roomId;
 
-  res.json({ ok: true, roomId, inviteLink });
-});
+      socket.emit("joinRoom", { roomId, name, asHost, hostPassword });
+      log("입장 요청…");
+    };
 
-io.on("connection", (socket) => {
-  socket.on("joinRoom", ({ roomId, name, asHost, hostPassword }) => {
-    if (!roomId || !name) return;
+    drawBtn.onclick = () => {
+      if(!currentRoom) return;
+      socket.emit("drawTop7", { roomId: currentRoom });
+    };
 
-    const room = getRoom(roomId);
-
-    // 호스트 입장 체크
-    if (asHost) {
-      if (room.hostSocketId) return socket.emit("errorMsg", "이미 호스트가 있습니다.");
-      if (!room.hostPassHash) return socket.emit("errorMsg", "호스트 비밀번호가 아직 설정되지 않았습니다.");
-      if (sha256(String(hostPassword || "")) !== room.hostPassHash) {
-        return socket.emit("errorMsg", "호스트 비밀번호가 틀렸습니다.");
-      }
-      room.hostSocketId = socket.id;
-    }
-
-    socket.join(roomId);
-
-    const exists = room.participants.some(p => p.name === name);
-    const safeName = exists ? `${name}-${socket.id.slice(-4)}` : name;
-    room.participants.push({ socketId: socket.id, name: safeName });
-
-    io.to(roomId).emit("participantsUpdate", {
-      participants: room.participants.map(p => p.name),
-      hostOnline: !!room.hostSocketId
+    socket.on("joined", ({ you, isHost: host }) => {
+      isHost = host;
+      drawBtn.disabled = !isHost;
+      log(`입장 완료: ${you}${isHost ? " (호스트)" : ""}`);
     });
 
-    socket.emit("joined", { you: safeName, isHost: room.hostSocketId === socket.id });
-  });
-
-  // ✅ Top7 추첨
-  socket.on("drawTop7", ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    if (room.hostSocketId !== socket.id) return socket.emit("errorMsg", "호스트만 추첨할 수 있습니다.");
-    const total = room.participants.length;
-    if (total === 0) return socket.emit("errorMsg", "참가자가 없습니다.");
-
-    const seed = crypto.randomBytes(4).readUInt32LE(0);
-    const picked = pickUniqueIndices(total, 7); // 1~7등 인덱스
-    const winners = picked.map((idx, r) => ({
-      rank: r + 1,
-      index: idx,
-      name: room.participants[idx].name
-    }));
-
-    io.to(roomId).emit("drawTop7Result", {
-      seed,
-      participants: room.participants.map(p => p.name),
-      winners,
-      at: new Date().toISOString()
+    socket.on("participantsUpdate", ({ participants, hostOnline }) => {
+      log(`참가자(${participants.length}):\n- ${participants.join("\n- ")}\n\n호스트온라인: ${hostOnline}`);
     });
-  });
 
-  socket.on("disconnect", () => {
-    for (const [roomId, room] of rooms.entries()) {
-      room.participants = room.participants.filter(p => p.socketId !== socket.id);
-      if (room.hostSocketId === socket.id) room.hostSocketId = null;
+    socket.on("drawTop7Result", ({ winners }) => {
+      const lines = winners
+        .slice()
+        .sort((a,b)=>a.rank-b.rank)
+        .map(w => `${w.rank}등: ${w.name}`)
+        .join("\n");
+      log("🎉 Top7 결과\n" + lines);
+    });
 
-      io.to(roomId).emit("participantsUpdate", {
-        participants: room.participants.map(p => p.name),
-        hostOnline: !!room.hostSocketId
-      });
-
-      if (room.participants.length === 0 && !room.hostSocketId) rooms.delete(roomId);
-    }
-  });
-});
-
-app.get("/", (req, res) => res.send("OK"));
-server.listen(process.env.PORT || 3000, () => console.log("Server running"));
+    socket.on("errorMsg", (m) => alert(m));
+  </script>
+</body>
+</html>
