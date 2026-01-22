@@ -1,35 +1,84 @@
 <!doctype html>
-<html>
+<html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WAT 레이스 추첨</title>
+  <title>WAT 핀볼 레이스 추첨 (Top 7)</title>
   <style>
-    body{font-family:system-ui,sans-serif;padding:16px;background:#0b0f17;color:#e9eef7}
-    input,button{padding:10px;border-radius:10px;border:1px solid #2b3550;background:#11182a;color:#e9eef7;margin:6px 6px 6px 0}
-    button{cursor:pointer;background:#1b2a4a}
+    :root{
+      --bg:#070b12; --panel:#0c1220; --line:rgba(255,255,255,.10);
+      --text:#e9eef7; --muted:rgba(233,238,247,.75);
+      --btn:#16233f; --inp:#0a1020;
+    }
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{padding:14px;max-width:980px;margin:0 auto}
+    h1{margin:0 0 10px;font-size:18px}
+    .panel{border:1px solid var(--line);background:var(--panel);border-radius:16px;padding:12px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input{
+      padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);
+      background:var(--inp);color:var(--text);min-width:140px
+    }
+    input[type="checkbox"]{min-width:auto}
+    button{
+      padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);
+      background:var(--btn);color:var(--text);cursor:pointer
+    }
     button:disabled{opacity:.5;cursor:not-allowed}
-    #log{white-space:pre-wrap;border:1px solid #2b3550;padding:12px;border-radius:12px;background:#0f172a;margin-top:10px}
+    .muted{color:var(--muted);font-size:12px}
+    #status{margin-top:8px}
+    .canvasWrap{
+      margin-top:12px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#060a12
+    }
+    canvas{display:block;width:100%;height:auto}
+    #results{margin-top:10px}
+    .rankList{margin:8px 0 0;padding:0;list-style:none}
+    .rankList li{
+      padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.03);margin:6px 0;display:flex;gap:10px;align-items:center
+    }
+    .rankNum{font-weight:900;min-width:44px}
+    .pill{
+      display:inline-flex;align-items:center;gap:6px;
+      padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.04);font-size:12px;color:var(--muted)
+    }
+    .spacer{flex:1}
   </style>
 </head>
 <body>
-  <h1>🏁 WAT 레이스 추첨</h1>
+  <div class="wrap">
+    <h1>🏁 WAT 핀볼 도트 레이스 추첨 (1~7등)</h1>
 
-  <div>
-    <input id="roomId" placeholder="방 코드" />
-    <input id="name" placeholder="닉네임" />
-    <label style="margin-right:6px;">
-      <input type="checkbox" id="asHost" /> 호스트
-    </label>
-    <input id="hostPassword" placeholder="호스트 비번(호스트만)" />
-    <button id="joinBtn">입장</button>
-    <button id="drawBtn" disabled>Top7 추첨</button>
+    <div class="panel">
+      <div class="row">
+        <input id="roomId" placeholder="방 코드" />
+        <input id="name" placeholder="닉네임" />
+        <label class="pill"><input type="checkbox" id="asHost" /> 호스트</label>
+        <input id="hostPassword" placeholder="호스트 비번(호스트만)" />
+        <button id="joinBtn">입장</button>
+        <button id="drawBtn" disabled>Top 7 레이스 시작</button>
+        <button id="copyInviteBtn">초대링크 복사</button>
+        <span class="spacer"></span>
+        <span class="pill" id="countPill">참가자: 0명</span>
+      </div>
+      <div id="status" class="muted">대기 중</div>
+      <div id="results"></div>
+    </div>
+
+    <div class="canvasWrap">
+      <canvas id="cv" width="900" height="520"></canvas>
+    </div>
+
+    <div class="muted" style="margin-top:8px;">
+      • 모바일 최적화: 캔버스(도트) 기반이라 참가자가 많아도 가볍게 동작합니다.<br/>
+      • 공정성: 당첨(1~7등)은 서버가 결정, 레이스 애니메이션은 seed로 모두 동일하게 재생됩니다.
+    </div>
   </div>
-
-  <div id="log">대기중…</div>
 
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
+    // ✅ Render 서버 주소
     const socket = io("https://wat-race.onrender.com");
 
     const roomIdEl = document.getElementById("roomId");
@@ -38,54 +87,384 @@
     const hostPwEl = document.getElementById("hostPassword");
     const joinBtn = document.getElementById("joinBtn");
     const drawBtn = document.getElementById("drawBtn");
-    const logEl = document.getElementById("log");
+    const copyInviteBtn = document.getElementById("copyInviteBtn");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const countPill = document.getElementById("countPill");
 
-    // 초대링크 ?room=WAT 자동 입력
+    const cv = document.getElementById("cv");
+    const ctx = cv.getContext("2d", { alpha: false });
+
+    let currentRoomId = null;
+    let isHost = false;
+
+    // 초대링크 ?room=WAT 자동입력
     const params = new URLSearchParams(location.search);
-    const room = params.get("room");
-    if (room) roomIdEl.value = room;
+    const roomFromUrl = params.get("room");
+    if (roomFromUrl) roomIdEl.value = roomFromUrl;
 
-    let currentRoom = null;
+    // 초대링크 복사
+    copyInviteBtn.onclick = async () => {
+      const roomId = (roomIdEl.value || "").trim();
+      if (!roomId) return alert("방 코드를 먼저 입력하세요.");
+      const link = `${location.origin}${location.pathname}?room=${encodeURIComponent(roomId)}`;
+      try {
+        await navigator.clipboard.writeText(link);
+        alert("초대링크 복사 완료!");
+      } catch {
+        prompt("복사가 안 되면 이 링크를 복사하세요:", link);
+      }
+    };
 
-    function log(msg){ logEl.textContent = msg; }
+    // Seeded RNG
+    function mulberry32(a) {
+      return function() {
+        let t = a += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      }
+    }
 
+    // DPR resize (모바일 선명)
+    function resizeCanvas() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const wrap = document.querySelector(".canvasWrap");
+      const maxW = Math.min(900, wrap.clientWidth);
+      const aspect = 900 / 520;
+      const w = maxW;
+      const h = Math.round(w / aspect);
+
+      cv.style.width = w + "px";
+      cv.style.height = h + "px";
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+
+      // draw in CSS pixels
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+
+    // Utilities
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+      }[m]));
+    }
+
+    // Pinball collision
+    function collideCircle(circle, peg) {
+      const dx = circle.x - peg.x;
+      const dy = circle.y - peg.y;
+      const dist = Math.hypot(dx, dy);
+      const minDist = circle.r + peg.r;
+      if (dist < minDist && dist > 0.0001) {
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const overlap = (minDist - dist);
+        circle.x += nx * overlap;
+        circle.y += ny * overlap;
+
+        const vn = circle.vx * nx + circle.vy * ny;
+        if (vn < 0) {
+          circle.vx -= 1.85 * vn * nx;
+          circle.vy -= 1.85 * vn * ny;
+        }
+        circle.vx *= 0.995;
+        circle.vy *= 0.995;
+      }
+    }
+
+    // Animation state
+    let anim = {
+      running: false,
+      raf: null,
+      finishShownRanks: new Set()
+    };
+
+    function stopAnim(){
+      anim.running = false;
+      if (anim.raf) cancelAnimationFrame(anim.raf);
+      anim.raf = null;
+      anim.finishShownRanks = new Set();
+    }
+
+    function setStatus(msg){ statusEl.textContent = msg; }
+
+    function showResults(winners){
+      const sorted = winners.slice().sort((a,b)=>a.rank-b.rank);
+      const items = sorted.map(w => `
+        <li>
+          <span class="rankNum">${w.rank}등</span>
+          <span>${escapeHtml(w.name)}</span>
+        </li>
+      `).join("");
+      resultsEl.innerHTML = `
+        <div style="font-weight:900;margin-top:8px;">🎉 당첨 결과 (1~7등)</div>
+        <ul class="rankList">${items}</ul>
+      `;
+    }
+
+    // “1등부터 7등까지 도착 알림” 표시 (상단 status에 순차 로그)
+    function announceRank(rank, name){
+      // iOS에서 소리/진동은 사용자 제스처 없으면 제한될 수 있어 텍스트만
+      const prev = statusEl.textContent;
+      setStatus(`${rank}등 도착: ${name}  |  ${prev}`);
+    }
+
+    // Pinball race
+    function startPinballRace({ participants, winners, seed }) {
+      stopAnim();
+      resultsEl.innerHTML = "";
+      resizeCanvas();
+
+      const rand = mulberry32((seed >>> 0) || 1);
+
+      const W = cv.clientWidth;
+      const H = cv.clientHeight;
+      const pad = 14;
+      const left = pad, right = W - pad, top = pad, bottom = H - pad;
+      const finishX = right - 52;
+
+      // Pegs
+      const pegCount = clamp(Math.floor(participants.length * 0.9), 30, 120);
+      const pegs = [];
+      for (let i = 0; i < pegCount; i++) {
+        const x = left + 60 + rand() * (finishX - left - 110);
+        const y = top + 30 + rand() * (bottom - top - 60);
+        const r = 4 + rand() * 6;
+        pegs.push({ x, y, r });
+      }
+
+      // Winners map
+      const winnerOrder = winners.slice().sort((a,b)=>a.rank-b.rank).map(w => w.index);
+      const rankByIndex = new Map();
+      winners.forEach(w => rankByIndex.set(w.index, w.rank));
+      const nameByIndex = new Map();
+      winners.forEach(w => nameByIndex.set(w.index, w.name));
+
+      // Target finish times for top7 (seconds)
+      const baseTime = 5.2 + rand() * 0.9;
+      const targetTime = new Map();
+      for (let k = 1; k <= Math.min(7, winnerOrder.length); k++) {
+        const idx = winnerOrder[k - 1];
+        targetTime.set(idx, baseTime + (k - 1) * (0.30 + rand() * 0.07));
+      }
+
+      // Racers (dots)
+      const N = participants.length;
+      const racers = [];
+      const baseR = (N > 120) ? 2.2 : (N > 70 ? 2.6 : 3.0);
+
+      for (let i = 0; i < N; i++) {
+        const laneY = top + 24 + (i % 18) * ((bottom - top - 48) / 18);
+        racers.push({
+          i,
+          x: left + 18 + rand() * 8,
+          y: clamp(laneY + (rand() - 0.5) * 10, top + 12, bottom - 12),
+          vx: 0.6 + rand() * 1.0,
+          vy: (rand() - 0.5) * 0.6,
+          r: baseR,
+          done: false,
+          tFinish: null
+        });
+      }
+
+      anim.running = true;
+      anim.finishShownRanks = new Set();
+      setStatus("레이스 시작!");
+
+      const start = performance.now();
+      const maxRunMs = 12000;
+
+      function drawScene(t, final=false) {
+        // background
+        ctx.fillStyle = "#060a12";
+        ctx.fillRect(0, 0, W, H);
+
+        // track border
+        ctx.strokeStyle = "rgba(255,255,255,0.10)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(pad, pad, W - pad*2, H - pad*2);
+
+        // finish line (checkers)
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        for (let y = top; y < bottom; y += 12) ctx.fillRect(finishX + 8, y, 10, 6);
+        ctx.fillStyle = "rgba(255,255,255,0.16)";
+        ctx.fillRect(finishX, top, 2, bottom - top);
+
+        // pegs
+        ctx.fillStyle = "rgba(255,255,255,0.11)";
+        for (const p of pegs) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+          ctx.fill();
+        }
+
+        // racers
+        for (const c of racers) {
+          const isTop = rankByIndex.has(c.i);
+          const r = c.r + (isTop ? 0.8 : 0.0);
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+          ctx.fillStyle = isTop ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.45)";
+          ctx.fill();
+        }
+
+        // overlay text
+        ctx.fillStyle = "rgba(233,238,247,0.85)";
+        ctx.font = "12px system-ui";
+        ctx.fillText(final ? "FINISH" : `RACE... ${t.toFixed(2)}s`, pad + 8, pad + 18);
+      }
+
+      function step(now) {
+        if (!anim.running) return;
+
+        const t = (now - start) / 1000;
+
+        // physics update
+        for (const c of racers) {
+          if (c.done) continue;
+
+          // forward pull
+          let pull = 0.020;
+          const wob = Math.sin((t * 6.0) + c.i * 0.7) * 0.010;
+
+          if (rankByIndex.has(c.i)) {
+            const target = targetTime.get(c.i);
+            const remain = Math.max(0.2, target - t);
+            const dist = Math.max(20, finishX - c.x);
+            const needV = dist / (remain * 60);
+            pull += clamp(needV * 0.030, 0.0, 0.060);
+          } else {
+            pull *= 0.92;
+          }
+
+          c.vx += pull;
+          c.vy += wob;
+          c.vy += Math.sin((t * 8.5) + c.i) * 0.002;
+
+          c.x += c.vx;
+          c.y += c.vy;
+
+          // walls
+          if (c.y < top + c.r) { c.y = top + c.r; c.vy *= -0.92; }
+          if (c.y > bottom - c.r) { c.y = bottom - c.r; c.vy *= -0.92; }
+          if (c.x < left + c.r) { c.x = left + c.r; c.vx *= -0.90; }
+
+          // peg collisions - stride
+          const stride = (N > 120) ? 3 : (N > 80 ? 2 : 1);
+          for (let j = (c.i % stride); j < pegs.length; j += stride) collideCircle(c, pegs[j]);
+
+          // friction
+          c.vx *= 0.992;
+          c.vy *= 0.992;
+
+          // finish check
+          if (c.x >= finishX) {
+            c.done = true;
+            c.tFinish = t;
+            c.x = finishX;
+
+            // announce if top7
+            if (rankByIndex.has(c.i)) {
+              const rank = rankByIndex.get(c.i);
+              if (!anim.finishShownRanks.has(rank)) {
+                anim.finishShownRanks.add(rank);
+                announceRank(rank, nameByIndex.get(c.i) || participants[c.i] || `#${c.i}`);
+              }
+            }
+          }
+        }
+
+        // draw
+        drawScene(t);
+
+        // stop condition: top7 all done or timeout
+        let top7Done = 0;
+        for (const idx of winnerOrder) {
+          const r = racers[idx];
+          if (r && r.done) top7Done++;
+        }
+
+        if (top7Done >= Math.min(7, winnerOrder.length) || (now - start) > maxRunMs) {
+          // force any missing top7 to finish
+          for (let k = 0; k < Math.min(7, winnerOrder.length); k++) {
+            const idx = winnerOrder[k];
+            const r = racers[idx];
+            if (r && !r.done) {
+              r.done = true;
+              r.tFinish = targetTime.get(idx) ?? (baseTime + k * 0.35);
+              r.x = finishX;
+
+              const rank = rankByIndex.get(idx);
+              if (!anim.finishShownRanks.has(rank)) {
+                anim.finishShownRanks.add(rank);
+                announceRank(rank, nameByIndex.get(idx) || participants[idx] || `#${idx}`);
+              }
+            }
+          }
+
+          anim.running = false;
+          setStatus("레이스 종료!");
+          showResults(winners);
+          drawScene(t, true);
+          return;
+        }
+
+        anim.raf = requestAnimationFrame(step);
+      }
+
+      anim.raf = requestAnimationFrame(step);
+    }
+
+    // ---- UI wiring ----
     joinBtn.onclick = () => {
-      const roomId = roomIdEl.value.trim();
-      const name = nameEl.value.trim();
+      const roomId = (roomIdEl.value || "").trim();
+      const name = (nameEl.value || "").trim();
       const asHost = asHostEl.checked;
       const hostPassword = hostPwEl.value;
 
-      if(!roomId || !name) return alert("방 코드/닉네임 입력");
-      currentRoom = roomId;
+      if (!roomId || !name) return alert("방 코드/닉네임 입력");
+      currentRoomId = roomId;
+      setStatus("입장 요청…");
 
       socket.emit("joinRoom", { roomId, name, asHost, hostPassword });
-      log("입장 요청…");
     };
 
     drawBtn.onclick = () => {
-      if(!currentRoom) return;
-      socket.emit("drawTop7", { roomId: currentRoom });
+      if (!currentRoomId) return;
+      if (anim.running) return;
+      resultsEl.innerHTML = "";
+      setStatus("서버에 Top7 추첨 요청…");
+      socket.emit("drawTop7", { roomId: currentRoomId });
     };
 
-    socket.on("joined", ({ you, isHost }) => {
+    // ---- Socket events ----
+    socket.on("joined", ({ you, isHost: host }) => {
+      isHost = host;
       drawBtn.disabled = !isHost;
-      log(`입장 완료: ${you}${isHost ? " (호스트)" : ""}`);
+      setStatus(`입장 완료: ${you}${isHost ? " (호스트)" : ""}`);
     });
 
     socket.on("participantsUpdate", ({ participants, hostOnline }) => {
-      log(`참가자(${participants.length}):\n- ${participants.join("\n- ")}\n\n호스트온라인: ${hostOnline}`);
+      countPill.textContent = `참가자: ${participants.length}명`;
+      if (!isHost) {
+        // 참여자는 안내만
+        // (호스트가 없으면 추첨 시작 버튼이 안 눌릴 뿐, 입장은 가능)
+        // status는 레이스 중 덮어쓰지 않게 최소화
+        if (!anim.running) setStatus(hostOnline ? "대기 중 (호스트 있음)" : "대기 중 (호스트 없음)");
+      }
     });
 
-    socket.on("drawTop7Result", ({ winners }) => {
-      const lines = winners
-        .slice()
-        .sort((a,b)=>a.rank-b.rank)
-        .map(w => `${w.rank}등: ${w.name}`)
-        .join("\n");
-      log("🎉 Top7 결과\n" + lines);
+    socket.on("drawTop7Result", ({ seed, participants, winners }) => {
+      // 서버가 당첨자 결정 -> 모두 동일 레이스
+      startPinballRace({ participants, winners, seed });
     });
 
-    socket.on("errorMsg", (m) => alert(m));
+    socket.on("errorMsg", (msg) => alert(msg));
   </script>
 </body>
 </html>
